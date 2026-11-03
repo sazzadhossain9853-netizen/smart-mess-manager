@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="description" content="স্মার্ট মেস ম্যানেজার — মিল, জমা ও খরচের হিসাব">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <title>স্মার্ট মেস ম্যানেজার</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+</head>
+<body class="bg-slate-100 text-slate-800">
+  <div id="root"></div>
+  <script>
+    // Firebase Console থেকে পাওয়া নিজের config এখানে বসাতে হবে।
+    const firebaseConfig = {
+      apiKey: "PASTE_YOUR_API_KEY",
+      authDomain: "PASTE_YOUR_PROJECT_ID.firebaseapp.com",
+      projectId: "PASTE_YOUR_PROJECT_ID",
+      appId: "PASTE_YOUR_APP_ID"
+    };
+    let cloudDb = null;
+    let cloudReady = false;
+    let cloudError = '';
+    try {
+      if (firebaseConfig.apiKey.startsWith('PASTE_') || firebaseConfig.projectId.startsWith('PASTE_')) {
+        cloudError = 'Firebase সেটআপ বাকি আছে। README-BN.txt অনুসরণ করে firebaseConfig পূরণ করুন।';
+      } else {
+        firebase.initializeApp(firebaseConfig);
+        cloudDb = firebase.firestore();
+        firebase.auth().signInAnonymously().catch(err => {
+          console.error(err); cloudError = 'Firebase লগইন ব্যর্থ: ' + err.message;
+        });
+        if ('serviceWorker' in navigator) {
+          window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.warn));
+        }
+      }
+    } catch (err) { cloudError = 'Firebase কনফিগারেশন ত্রুটি: ' + err.message; }
+  </script>
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const INITIAL_MEMBERS = [
+            { id: 1, name: "সাজ্জাদ" },
+            { id: 2, name: "হাসান" },
+            { id: 3, name: "সাগর" }
+        ];
+
+        function App() {
+            const [members, setMembers] = useState(INITIAL_MEMBERS);
+
+            const [mealData, setMealData] = useState({});
+
+            const [deposits, setDeposits] = useState([]);
+
+            const [riceDeposits, setRiceDeposits] = useState([]);
+
+            const [marketExpenses, setMarketExpenses] = useState([]);
+
+            const [extraExpenses, setExtraExpenses] = useState([]);
+
+            const [fines, setFines] = useState([]);
+
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [activeUserRole, setActiveUserRole] = useState('member'); // 'member' or 'manager'
+            const [currentMemberId, setCurrentMemberId] = useState(1);
+            const [managerPin, setManagerPin] = useState('1234');
+            const [enteredPin, setEnteredPin] = useState('');
+            const [isManagerLoggedIn, setIsManagerLoggedIn] = useState(false);
+
+            // Form States
+            const [formData, setFormData] = useState({});
+            const [editingId, setEditingId] = useState(null);
+            const [modalType, setModalType] = useState(null);
+
+            const [cloudStatus, setCloudStatus] = useState('ক্লাউড সংযোগ হচ্ছে…');
+            const [cloudLoaded, setCloudLoaded] = useState(false);
+            const applyingRemote = React.useRef(false);
+
+            // Sign in anonymously, then subscribe to the shared Firestore document.
+            useEffect(() => {
+                if (!cloudDb) { setCloudStatus(cloudError || 'Firebase কনফিগারেশন প্রয়োজন'); return; }
+                let unsubscribe = null;
+                let cancelled = false;
+                const start = async () => {
+                    try {
+                        await firebase.auth().signInAnonymously();
+                        if (cancelled) return;
+                        setCloudStatus('অনলাইন হিসাব সংযুক্ত');
+                        const ref = cloudDb.collection('messData').doc('main');
+                        unsubscribe = ref.onSnapshot(async (snap) => {
+                            if (cancelled) return;
+                            if (snap.exists) {
+                                const d = snap.data();
+                                applyingRemote.current = true;
+                                if (Array.isArray(d.members)) setMembers(d.members);
+                                if (d.mealData && typeof d.mealData === 'object') setMealData(d.mealData);
+                                if (Array.isArray(d.deposits)) setDeposits(d.deposits);
+                                if (Array.isArray(d.riceDeposits)) setRiceDeposits(d.riceDeposits);
+                                if (Array.isArray(d.marketExpenses)) setMarketExpenses(d.marketExpenses);
+                                if (Array.isArray(d.extraExpenses)) setExtraExpenses(d.extraExpenses);
+                                if (Array.isArray(d.fines)) setFines(d.fines);
+                            } else {
+                                await ref.set({ members: INITIAL_MEMBERS, mealData: {}, deposits: [], riceDeposits: [], marketExpenses: [], extraExpenses: [], fines: [], updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+                            }
+                            setCloudLoaded(true);
+                            setTimeout(() => { applyingRemote.current = false; }, 0);
+                        }, (err) => { console.error(err); setCloudStatus('ক্লাউড পড়তে সমস্যা: ' + err.message); });
+                    } catch (err) { console.error(err); setCloudStatus('ক্লাউড সংযোগ ব্যর্থ: ' + err.message); }
+                };
+                start();
+                return () => { cancelled = true; if (unsubscribe) unsubscribe(); };
+            }, []);
+
+            // Save the shared state to Firestore after initial data has loaded.
+            useEffect(() => {
+                if (!cloudDb || !cloudLoaded || applyingRemote.current || !firebase.auth().currentUser) return;
+                const payload = { members, mealData, deposits, riceDeposits, marketExpenses, extraExpenses, fines, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+                cloudDb.collection('messData').doc('main').set(payload, { merge: true })
+                  .then(() => setCloudStatus('সর্বশেষ হিসাব ক্লাউডে সেভ হয়েছে'))
+                  .catch(err => { console.error(err); setCloudStatus('সেভ ব্যর্থ: ' + err.message); });
+            }, [members, mealData, deposits, riceDeposits, marketExpenses, extraExpenses, fines, cloudLoaded]);
+
+            // Toggle meal: supports multiple counts (0, 1, 2, 3, 4, etc.)
+            const toggleMeal = (memberId, day, slot) => {
+                if (activeUserRole === 'member' && currentMemberId !== memberId) {
+                    alert('আপনি কেবল নিজের মিল পরিবর্তন করতে পারবেন!');
+                    return;
+                }
+                const key = `${day}_${slot}`;
+                setMealData(prev => {
+                    const currentVal = prev[memberId]?.[key] || 0;
+                    // Cycle: 0 -> 1 -> 2 -> 3 -> 4 -> 0
+                    const newVal = (currentVal + 1) % 5; 
+                    return {
+                        ...prev,
+                        [memberId]: {
+                            ...(prev[memberId] || {}),
+                            [key]: newVal
+                        }
+                    };
+                });
+            };
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                if (enteredPin === managerPin) {
+                    setIsManagerLoggedIn(true);
+                    setActiveUserRole('manager');
+                    setEnteredPin('');
+                    alert('ম্যানেজার মোডে সফলভাবে প্রবেশ করেছেন!');
+                } else {
+                    alert('ভুল পিন!');
+                }
+            };
+
+            // Calculations
+            const calculations = useMemo(() => {
+                let totalConsumedMeals = 0;
+                const memberMeals = {};
+
+                members.forEach(m => {
+                    let count = 0;
+                    for (let d = 1; d <= 31; d++) {
+                        ['morning', 'noon', 'night'].forEach(slot => {
+                            count += (mealData[m.id]?.[`${d}_${slot}`] || 0);
+                        });
+                    }
+                    memberMeals[m.id] = count;
+                    totalConsumedMeals += count;
+                });
+
+                const totalMarket = marketExpenses.reduce((sum, item) => sum + Number(item.amount), 0);
+                const totalExtra = extraExpenses.reduce((sum, item) => sum + Number(item.amount), 0);
+                const totalDeposit = deposits.reduce((sum, item) => sum + Number(item.amount), 0);
+                const totalRiceKg = riceDeposits.reduce((sum, item) => sum + Number(item.kg), 0);
+
+                const mealRate = totalConsumedMeals > 0 ? totalMarket / totalConsumedMeals : 0;
+                const extraCostPerMember = members.length > 0 ? totalExtra / members.length : 0;
+
+                const memberSummaries = members.map(m => {
+                    const mMeals = memberMeals[m.id] || 0;
+                    const mDeposit = deposits.filter(d => d.memberId === m.id).reduce((s, i) => s + Number(i.amount), 0);
+                    const mRice = riceDeposits.filter(r => r.memberId === m.id).reduce((s, i) => s + Number(i.kg), 0);
+                    const mFine = fines.filter(f => f.memberId === m.id).reduce((s, i) => s + Number(i.amount), 0);
+                    
+                    const mealCost = mMeals * mealRate;
+                    const totalCost = mealCost + extraCostPerMember + mFine;
+                    const balance = mDeposit - totalCost;
+
+                    return {
+                        ...m,
+                        consumedMeals: mMeals,
+                        deposit: mDeposit,
+                        riceKg: mRice,
+                        fine: mFine,
+                        mealCost,
+                        extraCost: extraCostPerMember,
+                        totalCost,
+                        balance
+                    };
+                });
+
+                return {
+                    totalConsumedMeals,
+                    totalMarket,
+                    totalExtra,
+                    totalDeposit,
+                    totalRiceKg,
+                    mealRate,
+                    extraCostPerMember,
+                    memberSummaries
+                };
+            }, [members, mealData, deposits, riceDeposits, marketExpenses, extraExpenses, fines]);
+
+            // Save handlers for manager
+            const handleSaveDeposit = (e) => {
+                e.preventDefault();
+                if (editingId) {
+                    setDeposits(deposits.map(d => d.id === editingId ? { ...d, ...formData } : d));
+                } else {
+                    setDeposits([...deposits, { id: Date.now(), ...formData, amount: Number(formData.amount) }]);
+                }
+                setFormData({}); setEditingId(null); setModalType(null);
+            };
+
+            const handleSaveRice = (e) => {
+                e.preventDefault();
+                setRiceDeposits([...riceDeposits, { id: Date.now(), ...formData, kg: Number(formData.kg) }]);
+                setFormData({}); setModalType(null);
+            };
+
+            const handleSaveMarket = (e) => {
+                e.preventDefault();
+                setMarketExpenses([...marketExpenses, { id: Date.now(), ...formData, amount: Number(formData.amount) }]);
+                setFormData({}); setModalType(null);
+            };
+
+            const handleSaveExtra = (e) => {
+                e.preventDefault();
+                setExtraExpenses([...extraExpenses, { id: Date.now(), ...formData, amount: Number(formData.amount) }]);
+                setFormData({}); setModalType(null);
+            };
+
+            const handleSaveFine = (e) => {
+                e.preventDefault();
+                setFines([...fines, { id: Date.now(), ...formData, amount: Number(formData.amount) }]);
+                setFormData({}); setModalType(null);
+            };
+
+            const handleAddMember = (e) => {
+                e.preventDefault();
+                if(formData.name) {
+                    setMembers([...members, { id: Date.now(), name: formData.name }]);
+                    setFormData({}); setModalType(null);
+                }
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto p-4">
+                    {/* Header */}
+                    <header className="bg-white shadow rounded-lg p-4 mb-4 flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div>
+                            <h1 className="text-2xl font-bold text-indigo-600">🏠 স্মার্ট মেস ম্যানেজার</h1>
+                            <p className="text-sm text-gray-500">বর্তমান মোড: <span className="font-semibold text-indigo-500">{activeUserRole === 'manager' ? 'ম্যানেজার' : 'সদস্য'}</span></p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            {activeUserRole === 'member' ? (
+                                <div className="flex items-center gap-2">
+                                    <select className="border p-2 rounded" value={currentMemberId} onChange={e => setCurrentMemberId(Number(e.target.value))}>
+                                        {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                    </select>
+                                    <form onSubmit={handleLogin} className="flex gap-1">
+                                        <input type="password" placeholder="ম্যানেজার পিন" className="border p-2 rounded w-28" value={enteredPin} onChange={e => setEnteredPin(e.target.value)} />
+                                        <button type="submit" className="bg-indigo-600 text-white px-3 py-2 rounded">লগইন</button>
+                                    </form>
+                                </div>
+                            ) : (
+                                <button onClick={() => { setIsManagerLoggedIn(false); setActiveUserRole('member'); }} className="bg-red-500 text-white px-4 py-2 rounded">ম্যানেজার লগআউট</button>
+                            )}
+                        </div>
+                    </header>
+                    <div className="mb-4 rounded-lg bg-white border p-3 text-sm" role="status">
+                      <span className="font-semibold">ডেটা স্ট্যাটাস: </span>{cloudStatus}
+                      <span className="block text-xs text-gray-500 mt-1">এই অ্যাপের সব ব্যবহারকারী একই অনলাইন মেসের হিসাব দেখবেন। লিংক যার কাছে থাকবে, সে ডেটা পরিবর্তন করতে পারতে পারে—নিরাপদ ব্যবহারের আগে Firestore Rules শক্ত করতে হবে।</span>
+                    </div>
+
+                    {/* Navigation Tabs */}
+                    <nav className="flex flex-wrap gap-2 mb-4 bg-white p-2 rounded shadow">
+                        <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-2 rounded ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>ড্যাশবোর্ড</button>
+                        <button onClick={() => setActiveTab('meals')} className={`px-4 py-2 rounded ${activeTab === 'meals' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>মিল ছক (১-৩১)</button>
+                        <button onClick={() => setActiveTab('deposits')} className={`px-4 py-2 rounded ${activeTab === 'deposits' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>টাকা ও চাউল জমা</button>
+                        <button onClick={() => setActiveTab('expenses')} className={`px-4 py-2 rounded ${activeTab === 'expenses' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>বাজার ও খরচ</button>
+                        <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded ${activeTab === 'settings' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>মেম্বার ও জরিমানা</button>
+                    </nav>
+
+                    {/* Main Content Area */}
+                    <main className="bg-white p-4 rounded shadow">
+                        {activeTab === 'dashboard' && (
+                            <div>
+                                <h2 className="text-xl font-bold mb-4">📊 মেস সামারি</h2>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                                    <div className="bg-blue-50 p-4 rounded border border-blue-200">
+                                        <p className="text-sm text-gray-600">মোট মিল</p>
+                                        <p className="text-2xl font-bold text-blue-600">{calculations.totalConsumedMeals}</p>
+                                    </div>
+                                    <div className="bg-green-50 p-4 rounded border border-green-200">
+                                        <p className="text-sm text-gray-600">মোট বাজার খরচ</p>
+                                        <p className="text-2xl font-bold text-green-600">৳{calculations.totalMarket}</p>
+                                    </div>
+                                    <div className="bg-yellow-50 p-4 rounded border border-yellow-200">
+                                        <p className="text-sm text-gray-600">বর্তমান মিল রেট</p>
+                                        <p className="text-2xl font-bold text-yellow-600">৳{calculations.mealRate.toFixed(2)}</p>
+                                    </div>
+                                    <div className="bg-purple-50 p-4 rounded border border-purple-200">
+                                        <p className="text-sm text-gray-600">মোট জমা</p>
+                                        <p className="text-2xl font-bold text-purple-600">৳{calculations.totalDeposit}</p>
+                                    </div>
+                                </div>
+
+                                <h3 className="text-lg font-bold mb-2">সদস্যভিত্তিক চূড়ান্ত হিসাব</h3>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead>
+                                            <tr className="bg-gray-100 border-b">
+                                                <th className="p-2 border">নাম</th>
+                                                <th className="p-2 border">মোট মিল</th>
+                                                <th className="p-2 border">মিল খরচ</th>
+                                                <th className="p-2 border">অন্যান্য খরচ</th>
+                                                <th className="p-2 border">জরিমানা</th>
+                                                <th className="p-2 border">মোট জমা</th>
+                                                <th className="p-2 border">অবশিষ্ট ব্যালেন্স</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {calculations.memberSummaries.map(m => (
+                                                <tr key={m.id} className="border-b">
+                                                    <td className="p-2 border font-medium">{m.name}</td>
+                                                    <td className="p-2 border">{m.consumedMeals}</td>
+                                                    <td className="p-2 border">৳{m.mealCost.toFixed(1)}</td>
+                                                    <td className="p-2 border">৳{m.extraCost.toFixed(1)}</td>
+                                                    <td className="p-2 border text-red-500">৳{m.fine}</td>
+                                                    <td className="p-2 border text-green-600">৳{m.deposit}</td>
+                                                    <td className={`p-2 border font-bold ${m.balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                                                        ৳{m.balance.toFixed(1)} {m.balance >= 0 ? '(পাবে)' : '(দিবে)'}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'meals' && (
+                            <div>
+                                <h2 className="text-xl font-bold mb-2">🗓️ ১ থেকে ৩১ তারিখের মিল ছক</h2>
+                                <p className="text-sm text-gray-500 mb-4">💡 টিপস: মিল অপশনে ক্লিক করলে সংখ্যা বাড়াতে পারবেন (যেমন: ০ -> ১ -> ২ -> ৩ -> ৪ ...)। গেস্ট বা অতিরিক্ত মিলের জন্য এভাবে ৪ বা তার বেশি মিল দিতে পারবেন।</p>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-center border-collapse">
+                                        <thead>
+                                            <tr className="bg-gray-100 border-b">
+                                                <th className="p-2 border">তারিখ</th>
+                                                {members.map(m => <th key={m.id} className="p-2 border">{m.name}</th>)}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                                                <tr key={day} className="border-b">
+                                                    <td className="p-2 border font-bold bg-gray-50">{day} তারিখ</td>
+                                                    {members.map(m => {
+                                                        const mMorning = mealData[m.id]?.[`${day}_morning`] || 0;
+                                                        const mNoon = mealData[m.id]?.[`${day}_noon`] || 0;
+                                                        const mNight = mealData[m.id]?.[`${day}_night`] || 0;
+                                                        return (
+                                                            <td key={m.id} className="p-2 border text-xs">
+                                                                <div className="flex justify-center gap-1">
+                                                                    <button onClick={() => toggleMeal(m.id, day, 'morning')} className={`px-1.5 py-0.5 rounded ${mMorning > 0 ? 'bg-green-500 text-white font-bold' : 'bg-gray-200'}`} title="সকাল">স:{mMorning}</button>
+                                                                    <button onClick={() => toggleMeal(m.id, day, 'noon')} className={`px-1.5 py-0.5 rounded ${mNoon > 0 ? 'bg-blue-500 text-white font-bold' : 'bg-gray-200'}`} title="দুপুর">দু:{mNoon}</button>
+                                                                    <button onClick={() => toggleMeal(m.id, day, 'night')} className={`px-1.5 py-0.5 rounded ${mNight > 0 ? 'bg-purple-500 text-white font-bold' : 'bg-gray-200'}`} title="রাত">রা:{mNight}</button>
+                                                                </div>
+                                                            </td>
+                                                        );
+                                                    })}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'deposits' && (
+                            <div>
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-xl font-bold">💰 টাকা ও চাউল জমা</h2>
+                                    {activeUserRole === 'manager' && (
+                                        <div className="flex gap-2">
+                                            <button onClick={() => { setModalType('deposit'); setFormData({}); }} className="bg-indigo-600 text-white px-3 py-1 rounded text-sm">+ টাকা জমা</button>
+                                            <button onClick={() => { setModalType('rice'); setFormData({}); }} className="bg-emerald-600 text-white px-3 py-1 rounded text-sm">+ চাউল জমা</button>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <h3 className="font-bold mb-2">টাকা জমার ইতিহাস</h3>
+                                        <table className="w-full text-left border-collapse text-sm">
+                                            <thead><tr className="bg-gray-100 border-b"><th className="p-2 border">তারিখ</th><th className="p-2 border">নাম</th><th className="p-2 border">টাকা</th>{activeUserRole === 'manager' && <th className="p-2 border">অ্যাকশন</th>}</tr></thead>
+                                            <tbody>
+                                                {deposits.map(d => {
+                                                    const mem = members.find(m => m.id === Number(d.memberId));
+                                                    return (
+                                                        <tr key={d.id} className="border-b">
+                                                            <td className="p-2 border">{d.date}</td>
+                                                            <td className="p-2 border">{mem ? mem.name : ''}</td>
+                                                            <td className="p-2 border">৳{d.amount}</td>
+                                                            {activeUserRole === 'manager' && (
+                                                                <td className="p-2 border">
+                                                                    <button onClick={() => setDeposits(deposits.filter(item => item.id !== d.id))} className="text-red-500 text-xs">ডিলিট</button>
+                                                                </td>
+                                                            )}
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold mb-2">চাউল জমার ইতিহাস</h3>
+                                        <table className="w-full text-left border-collapse text-sm">
+                                            <thead><tr className="bg-gray-100 border-b"><th className="p-2 border">তারিখ</th><th className="p-2 border">নাম</th><th className="p-2 border">পরিমাণ (কেজি)</th>{activeUserRole === 'manager' && <th className="p-2 border">অ্যাকশন</th>}</tr></thead>
+                                            <tbody>
+                                                {riceDeposits.map(r => {
+                                                    const mem = members.find(m => m.id === Number(r.memberId));
+                                                    return (
+                                                        <tr key={r.id} className="border-b">
+                                                            <td className="p-2 border">{r.date}</td>
+                                                            <td className="p-2 border">{mem ? mem.name : ''}</td>
+                                                            <td className="p-2 border">{r.kg} কেজি</td>
+                                                            {activeUserRole === 'manager' && (
+                                                                <td className="p-2 border">
+                                                                    <button onClick={() => setRiceDeposits(riceDeposits.filter(item => item.id !== r.id))} className="text-red-500 text-xs">ডিলিট</button>
+                                                                </td>
+                                                            )}
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'expenses' && (
+                            <div>
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-xl font-bold">🛒 বাজার ও অতিরিক্ত খরচ</h2>
+                                    {activeUserRole === 'manager' && (
+                                        <div className="flex gap-2">
+                                            <button onClick={() => { setModalType('market'); setFormData({}); }} className="bg-green-600 text-white px-3 py-1 rounded text-sm">+ বাজার খরচ</button>
+                                            <button onClick={() => { setModalType('extra'); setFormData({}); }} className="bg-orange-600 text-white px-3 py-1 rounded text-sm">+ অতিরিক্ত খরচ</button>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <h3 className="font-bold mb-2">বাজার খরচের তালিকা</h3>
+                                        <table className="w-full text-left border-collapse text-sm">
+                                            <thead><tr className="bg-gray-100 border-b"><th className="p-2 border">তারিখ</th><th className="p-2 border">বিবরণ</th><th className="p-2 border">টাকা</th>{activeUserRole === 'manager' && <th className="p-2 border">অ্যাকশন</th>}</tr></thead>
+                                            <tbody>
+                                                {marketExpenses.map(m => (
+                                                    <tr key={m.id} className="border-b">
+                                                        <td className="p-2 border">{m.date}</td>
+                                                        <td className="p-2 border">{m.note}</td>
+                                                        <td className="p-2 border">৳{m.amount}</td>
+                                                        {activeUserRole === 'manager' && (
+                                                            <td className="p-2 border"><button onClick={() => setMarketExpenses(marketExpenses.filter(i => i.id !== m.id))} className="text-red-500 text-xs">ডিলিট</button></td>
+                                                        )}
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold mb-2">অতিরিক্ত খরচ (খালা বিল, কারেন্ট ইত্যাদি)</h3>
+                                        <table className="w-full text-left border-collapse text-sm">
+                                            <thead><tr className="bg-gray-100 border-b"><th className="p-2 border">খাত</th><th className="p-2 border">টাকা</th>{activeUserRole === 'manager' && <th className="p-2 border">অ্যাকশন</th>}</tr></thead>
+                                            <tbody>
+                                                {extraExpenses.map(e => (
+                                                    <tr key={e.id} className="border-b">
+                                                        <td className="p-2 border">{e.category}</td>
+                                                        <td className="p-2 border">৳{e.amount}</td>
+                                                        {activeUserRole === 'manager' && (
+                                                            <td className="p-2 border"><button onClick={() => setExtraExpenses(extraExpenses.filter(i => i.id !== e.id))} className="text-red-500 text-xs">ডিলিট</button></td>
+                                                        )}
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'settings' && (
+                            <div>
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-xl font-bold">⚙️ মেম্বার ও জরিমানা ম্যানেজমেন্ট</h2>
+                                    {activeUserRole === 'manager' && (
+                                        <div className="flex gap-2">
+                                            <button onClick={() => { setModalType('member'); setFormData({}); }} className="bg-indigo-600 text-white px-3 py-1 rounded text-sm">+ নতুন মেম্বার</button>
+                                            <button onClick={() => { setModalType('fine'); setFormData({}); }} className="bg-red-600 text-white px-3 py-1 rounded text-sm">+ জরিমানা যোগ</button>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <h3 className="font-bold mb-2">মেসের সদস্যবৃন্দ</h3>
+                                        <ul className="border rounded divide-y">
+                                            {members.map(m => (
+                                                <li key={m.id} className="p-2 flex justify-between items-center">
+                                                    <span>{m.name}</span>
+                                                    {activeUserRole === 'manager' && members.length > 1 && (
+                                                        <button onClick={() => setMembers(members.filter(item => item.id !== m.id))} className="text-red-500 text-xs">বাদ দিন</button>
+                                                    )}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold mb-2">জরিমানার তালিকা</h3>
+                                        <table className="w-full text-left border-collapse text-sm">
+                                            <thead><tr className="bg-gray-100 border-b"><th className="p-2 border">নাম</th><th className="p-2 border">কারণ</th><th className="p-2 border">টাকা</th>{activeUserRole === 'manager' && <th className="p-2 border">অ্যাকশন</th>}</tr></thead>
+                                            <tbody>
+                                                {fines.map(f => {
+                                                    const mem = members.find(m => m.id === Number(f.memberId));
+                                                    return (
+                                                        <tr key={f.id} className="border-b">
+                                                            <td className="p-2 border">{mem ? mem.name : ''}</td>
+                                                            <td className="p-2 border">{f.reason}</td>
+                                                            <td className="p-2 border text-red-500">৳{f.amount}</td>
+                                                            {activeUserRole === 'manager' && (
+                                                                <td className="p-2 border"><button onClick={() => setFines(fines.filter(i => i.id !== f.id))} className="text-red-500 text-xs">ডিলিট</button></td>
+                                                            )}
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Modals for Manager */}
+                    {modalType && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+                            <div className="bg-white p-6 rounded-lg w-full max-w-md">
+                                <h3 className="text-lg font-bold mb-4">তথ্য যুক্ত করুন</h3>
+                                {modalType === 'deposit' && (
+                                    <form onSubmit={handleSaveDeposit} className="space-y-3">
+                                        <select className="border w-full p-2 rounded" required value={formData.memberId || ''} onChange={e => setFormData({...formData, memberId: e.target.value})}>
+                                            <option value="">সদস্য সিলেক্ট করুন</option>
+                                            {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                        </select>
+                                        <input type="date" className="border w-full p-2 rounded" required value={formData.date || ''} onChange={e => setFormData({...formData, date: e.target.value})} />
+                                        <input type="number" placeholder="টাকার পরিমাণ" className="border w-full p-2 rounded" required value={formData.amount || ''} onChange={e => setFormData({...formData, amount: e.target.value})} />
+                                        <div className="flex justify-end gap-2"><button type="button" onClick={() => setModalType(null)} className="px-3 py-1 bg-gray-300 rounded">বাতিল</button><button type="submit" className="px-3 py-1 bg-indigo-600 text-white rounded">সেভ</button></div>
+                                    </form>
+                                )}
+                                {modalType === 'rice' && (
+                                    <form onSubmit={handleSaveRice} className="space-y-3">
+                                        <select className="border w-full p-2 rounded" required value={formData.memberId || ''} onChange={e => setFormData({...formData, memberId: e.target.value})}>
+                                            <option value="">সদস্য সিলেক্ট করুন</option>
+                                            {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                        </select>
+                                        <input type="date" className="border w-full p-2 rounded" required value={formData.date || ''} onChange={e => setFormData({...formData, date: e.target.value})} />
+                                        <input type="number" placeholder="চাউল (কেজি)" className="border w-full p-2 rounded" required value={formData.kg || ''} onChange={e => setFormData({...formData, kg: e.target.value})} />
+                                        <div className="flex justify-end gap-2"><button type="button" onClick={() => setModalType(null)} className="px-3 py-1 bg-gray-300 rounded">বাতিল</button><button type="submit" className="px-3 py-1 bg-indigo-600 text-white rounded">সেভ</button></div>
+                                    </form>
+                                )}
+                                {modalType === 'market' && (
+                                    <form onSubmit={handleSaveMarket} className="space-y-3">
+                                        <input type="date" className="border w-full p-2 rounded" required value={formData.date || ''} onChange={e => setFormData({...formData, date: e.target.value})} />
+                                        <input type="text" placeholder="বাজারের বিবরণ (যেমন: মাছ ও সবজি)" className="border w-full p-2 rounded" required value={formData.note || ''} onChange={e => setFormData({...formData, note: e.target.value})} />
+                                        <input type="number" placeholder="খরচ (টাকা)" className="border w-full p-2 rounded" required value={formData.amount || ''} onChange={e => setFormData({...formData, amount: e.target.value})} />
+                                        <div className="flex justify-end gap-2"><button type="button" onClick={() => setModalType(null)} className="px-3 py-1 bg-gray-300 rounded">বাতিল</button><button type="submit" className="px-3 py-1 bg-indigo-600 text-white rounded">সেভ</button></div>
+                                    </form>
+                                )}
+                                {modalType === 'extra' && (
+                                    <form onSubmit={handleSaveExtra} className="space-y-3">
+                                        <input type="text" placeholder="খাতের নাম (যেমন: খালা বিল, কারেন্ট বিল)" className="border w-full p-2 rounded" required value={formData.category || ''} onChange={e => setFormData({...formData, category: e.target.value})} />
+                                        <input type="number" placeholder="টাকা" className="border w-full p-2 rounded" required value={formData.amount || ''} onChange={e => setFormData({...formData, amount: e.target.value})} />
+                                        <div className="flex justify-end gap-2"><button type="button" onClick={() => setModalType(null)} className="px-3 py-1 bg-gray-300 rounded">বাতিল</button><button type="submit" className="px-3 py-1 bg-indigo-600 text-white rounded">সেভ</button></div>
+                                    </form>
+                                )}
+                                {modalType === 'fine' && (
+                                    <form onSubmit={handleSaveFine} className="space-y-3">
+                                        <select className="border w-full p-2 rounded" required value={formData.memberId || ''} onChange={e => setFormData({...formData, memberId: e.target.value})}>
+                                            <option value="">সদস্য সিলেক্ট করুন</option>
+                                            {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                        </select>
+                                        <input type="text" placeholder="জরিমানার কারণ" className="border w-full p-2 rounded" required value={formData.reason || ''} onChange={e => setFormData({...formData, reason: e.target.value})} />
+                                        <input type="number" placeholder="টাকা" className="border w-full p-2 rounded" required value={formData.amount || ''} onChange={e => setFormData({...formData, amount: e.target.value})} />
+                                        <div className="flex justify-end gap-2"><button type="button" onClick={() => setModalType(null)} className="px-3 py-1 bg-gray-300 rounded">বাতিল</button><button type="submit" className="px-3 py-1 bg-indigo-600 text-white rounded">সেভ</button></div>
+                                    </form>
+                                )}
+                                {modalType === 'member' && (
+                                    <form onSubmit={handleAddMember} className="space-y-3">
+                                        <input type="text" placeholder="নতুন সদস্যের নাম" className="border w-full p-2 rounded" required value={formData.name || ''} onChange={e => setFormData({...formData, name: e.target.value})} />
+                                        <div className="flex justify-end gap-2"><button type="button" onClick={() => setModalType(null)} className="px-3 py-1 bg-gray-300 rounded">বাতিল</button><button type="submit" className="px-3 py-1 bg-indigo-600 text-white rounded">সেভ</button></div>
+                                    </form>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
